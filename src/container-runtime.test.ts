@@ -60,6 +60,7 @@ describe('ensureContainerRuntimeRunning', () => {
       timeout: 10000,
     });
     expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: expect.any(String) }),
       'Container runtime already running',
     );
   });

@@ -39,6 +39,18 @@ export async function run(_args: string[]): Promise<void> {
     }
   }
 
+  // Check Podman
+  let podman: 'running' | 'installed_not_running' | 'not_found' = 'not_found';
+  if (commandExists('podman')) {
+    try {
+      const { execSync } = await import('child_process');
+      execSync('podman info', { stdio: 'ignore' });
+      podman = 'running';
+    } catch {
+      podman = 'installed_not_running';
+    }
+  }
+
   // Check existing config
   const hasEnv = fs.existsSync(path.join(projectRoot, '.env'));
 
@@ -72,6 +84,7 @@ export async function run(_args: string[]): Promise<void> {
       wsl,
       appleContainer,
       docker,
+      podman,
       hasEnv,
       hasAuth,
       hasRegisteredGroups,
@@ -85,6 +98,7 @@ export async function run(_args: string[]): Promise<void> {
     IS_HEADLESS: headless,
     APPLE_CONTAINER: appleContainer,
     DOCKER: docker,
+    PODMAN: podman,
     HAS_ENV: hasEnv,
     HAS_AUTH: hasAuth,
     HAS_REGISTERED_GROUPS: hasRegisteredGroups,

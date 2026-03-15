@@ -29,6 +29,7 @@ import {
 import {
   getAllChats,
   getAllRegisteredGroups,
+  deleteSession,
   getAllSessions,
   getAllTasks,
   getMessagesSince,
@@ -336,6 +337,13 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
+      // If the session no longer exists (e.g. idle container timed out and
+      // was replaced), clear the stale ID so the next retry starts fresh.
+      if (output.error?.includes('No conversation found with session ID')) {
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        logger.info({ group: group.name }, 'Cleared stale session ID');
+      }
       return 'error';
     }
 

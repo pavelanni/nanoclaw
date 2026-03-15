@@ -89,10 +89,15 @@ export async function run(_args: string[]): Promise<void> {
     containerRuntime = 'apple-container';
   } catch {
     try {
-      execSync('docker info', { stdio: 'ignore' });
-      containerRuntime = 'docker';
+      execSync('podman info', { stdio: 'ignore' });
+      containerRuntime = 'podman';
     } catch {
-      // No runtime
+      try {
+        execSync('docker info', { stdio: 'ignore' });
+        containerRuntime = 'docker';
+      } catch {
+        // No runtime
+      }
     }
   }
 

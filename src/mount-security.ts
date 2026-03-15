@@ -35,6 +35,7 @@ const DEFAULT_BLOCKED_PATTERNS = [
   '.gcloud',
   '.kube',
   '.docker',
+  '.local/share/containers',
   'credentials',
   '.env',
   '.netrc',
