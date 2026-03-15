@@ -99,7 +99,7 @@ provision:
 
     # Podman is included in Fedora Cloud, but make sure it is present
     # along with build tools needed by native npm modules (better-sqlite3)
-    dnf install -y podman nodejs npm gcc-c++ make python3 git sqlite3
+    dnf install -y podman nodejs npm gcc-c++ make python3 git sqlite3 gh
 
     # Enable lingering so the user's systemd services (and Podman
     # socket) survive after the SSH session disconnects

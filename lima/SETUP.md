@@ -62,6 +62,79 @@ Then run `/setup` inside Claude Code to add channels and register your main grou
 `/setup` detects Podman automatically, configures `NANOCLAW_DATA_DIR`, adds `:z` SELinux
 labels to container mounts, and starts the systemd service.
 
+## GitHub access (git push and gh CLI)
+
+The Lima VM does not inherit your Mac's SSH keys or GitHub credentials —
+this is intentional (see [Mount policy](#mount-policy)). If you want to
+push commits or open pull requests from inside the VM, you need to set
+up access explicitly.
+
+### SSH key for git push
+
+Generate a dedicated key inside the VM, then upload it to GitHub once.
+
+```bash
+# Inside the VM
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_github -N "" -C "nanoclaw-lima"
+cat ~/.ssh/id_ed25519_github.pub   # copy this to GitHub
+```
+
+Add to GitHub: **Settings → SSH and GPG keys → New SSH key**, paste the
+`id_ed25519_github.pub` output.
+
+Then configure SSH to use it and trust GitHub's host key:
+
+```bash
+cat >> ~/.ssh/config << 'EOF'
+
+Host github.com
+  IdentityFile ~/.ssh/id_ed25519_github
+  AddKeysToAgent yes
+EOF
+
+ssh-keyscan github.com >> ~/.ssh/known_hosts
+ssh -T git@github.com   # should print: Hi <username>! You've successfully authenticated…
+```
+
+> **Note:** `~/.ssh/` lives on VM-local storage (not the virtiofs mount),
+> so this key is private to the VM.
+
+### gh CLI authentication
+
+The `gh` CLI is installed by the provision script. Authenticate it with
+a GitHub Personal Access Token (PAT):
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
+2. Generate a new token with at minimum the **`repo`** scope (needed to create and merge PRs)
+3. Inside the VM, run:
+
+```bash
+gh auth login
+# Choose: GitHub.com → HTTPS → Paste an authentication token
+```
+
+Or set the token directly in the environment:
+
+```bash
+export GH_TOKEN=<your-token>
+# To persist across sessions, add it to ~/.bashrc or ~/.bash_profile
+```
+
+Verify:
+
+```bash
+gh auth status
+```
+
+### Git identity
+
+Set your name and email so commits are attributed correctly:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
 ## Mount policy
 
 Lima mounts control what the VM can see on your Mac. The Lima config
@@ -298,10 +371,17 @@ Agent error: Claude Code returned an error result: No conversation found with se
 conversation was in progress). The session ID from that container is persisted in SQLite,
 so every retry tries to resume a conversation that no longer exists.
 
-**Fix:**
+**Auto-recovery (NanoClaw ≥ 1.2.17):** NanoClaw detects this error, clears the stale
+session from SQLite automatically, and retries with a fresh session. No manual
+intervention is needed for the bot to recover.
+
+**Manual fix (to also recover missed messages):**
+
+If messages arrived during the failure window and were never processed, reset the
+router cursor so they are re-queued:
 
 ```bash
-# 1. Clear the stale session
+# 1. Clear the stale session (if auto-recovery hasn't already done it)
 sqlite3 store/messages.db "DELETE FROM sessions WHERE group_folder='telegram_main';"
 
 # 2. Find the timestamp of the last successfully delivered message in the log,
