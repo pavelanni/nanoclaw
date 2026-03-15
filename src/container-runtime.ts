@@ -114,7 +114,8 @@ export function readonlyMountArgs(
 ): string[] {
   // Podman on SELinux requires :z to relabel for container access.
   // Skip for device files like /dev/null which can't be relabeled.
-  const selinuxLabel = RUNTIME === 'podman' && !hostPath.startsWith('/dev/') ? ',z' : '';
+  const selinuxLabel =
+    RUNTIME === 'podman' && !hostPath.startsWith('/dev/') ? ',z' : '';
   return ['-v', `${hostPath}:${containerPath}:ro${selinuxLabel}`];
 }
 
