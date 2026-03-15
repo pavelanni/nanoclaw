@@ -175,28 +175,42 @@ function killOrphanedProcesses(projectRoot: string): void {
 }
 
 /**
- * Detect stale docker group membership in the user systemd session.
+ * Detect stale container runtime group membership in the user systemd session.
  *
- * When a user is added to the docker group mid-session, the user systemd
+ * When a user is added to the docker/podman group mid-session, the user systemd
  * daemon (user@UID.service) keeps the old group list from login time.
- * Docker works in the terminal but not in the service context.
+ * The runtime works in the terminal but not in the service context.
  *
  * Only relevant on Linux with user-level systemd (not root, not macOS, not WSL nohup).
+ * Not relevant for rootless Podman (no group membership needed).
  */
-function checkDockerGroupStale(): boolean {
+function checkContainerGroupStale(): boolean {
+  // Detect which runtime is available
+  let runtimeBin: string | null = null;
+  for (const bin of ['podman', 'docker']) {
+    try {
+      execSync(`command -v ${bin}`, { stdio: 'pipe' });
+      runtimeBin = bin;
+      break;
+    } catch {
+      // try next
+    }
+  }
+  if (!runtimeBin) return false;
+
   try {
-    execSync('systemd-run --user --pipe --wait docker info', {
+    execSync(`systemd-run --user --pipe --wait ${runtimeBin} info`, {
       stdio: 'pipe',
       timeout: 10000,
     });
-    return false; // Docker works from systemd session
+    return false; // Runtime works from systemd session
   } catch {
-    // Check if docker works from the current shell (to distinguish stale group vs broken docker)
+    // Check if runtime works from the current shell (to distinguish stale group vs broken runtime)
     try {
-      execSync('docker info', { stdio: 'pipe', timeout: 5000 });
+      execSync(`${runtimeBin} info`, { stdio: 'pipe', timeout: 5000 });
       return true; // Works in shell but not systemd session → stale group
     } catch {
-      return false; // Docker itself is not working, different issue
+      return false; // Runtime itself is not working, different issue
     }
   }
 }
@@ -254,11 +268,11 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
   fs.writeFileSync(unitPath, unit);
   logger.info({ unitPath }, 'Wrote systemd unit');
 
-  // Detect stale docker group before starting (user systemd only)
-  const dockerGroupStale = !runningAsRoot && checkDockerGroupStale();
+  // Detect stale container runtime group before starting (user systemd only)
+  const dockerGroupStale = !runningAsRoot && checkContainerGroupStale();
   if (dockerGroupStale) {
     logger.warn(
-      'Docker group not active in systemd session — user was likely added to docker group mid-session',
+      'Container runtime group not active in systemd session — user was likely added to the group mid-session',
     );
   }
 

@@ -24,6 +24,8 @@ import {
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
+  userMappingArgs,
+  writableMountSuffix,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -154,6 +156,7 @@ function buildVolumeMounts(
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
+      fs.rmSync(dstDir, { recursive: true, force: true });
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
@@ -168,7 +171,11 @@ function buildVolumeMounts(
   const groupIpcDir = resolveGroupIpcPath(group.folder);
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  // 0o777: the container (different uid than host) must be able to unlink files
+  // it didn't create. Without world-write on the directory, unlink fails EACCES.
+  const inputDir = path.join(groupIpcDir, 'input');
+  fs.mkdirSync(inputDir, { recursive: true });
+  fs.chmodSync(inputDir, 0o777);
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -190,8 +197,13 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (fs.existsSync(agentRunnerSrc)) {
+    const isEmpty =
+      !fs.existsSync(groupAgentRunnerDir) ||
+      fs.readdirSync(groupAgentRunnerDir).length === 0;
+    if (isEmpty) {
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -241,13 +253,11 @@ function buildContainerArgs(
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
-  // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
-  const hostUid = process.getuid?.();
-  const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+  // Map host user into container so bind-mounted files are accessible.
+  // Docker: --user UID:GID; Podman rootless: --userns=keep-id.
+  const userArgs = userMappingArgs();
+  args.push(...userArgs);
+  if (userArgs.length > 0 && userArgs[0] === '--user') {
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -255,7 +265,7 @@ function buildContainerArgs(
     if (mount.readonly) {
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
     } else {
-      args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
+      args.push('-v', `${mount.hostPath}:${mount.containerPath}${writableMountSuffix()}`);
     }
   }
 
@@ -540,6 +550,18 @@ export async function runContainerAgent(
 
       fs.writeFileSync(logFile, logLines.join('\n'));
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
+
+      // Clean up stale IPC input files the container may not have consumed
+      // (e.g. if it exited before processing them, or couldn't unlink due to
+      // SELinux — the host process owns the files and can always delete them).
+      const ipcInputDir = path.join(resolveGroupIpcPath(group.folder), 'input');
+      try {
+        for (const f of fs.readdirSync(ipcInputDir)) {
+          fs.unlinkSync(path.join(ipcInputDir, f));
+        }
+      } catch {
+        // non-fatal
+      }
 
       if (code !== 0) {
         logger.error(

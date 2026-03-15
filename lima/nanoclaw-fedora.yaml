@@ -1,0 +1,117 @@
+# Lima VM configuration for running NanoClaw on Fedora with Podman.
+#
+# Usage:
+#   limactl create --name nanoclaw lima/nanoclaw-fedora.yaml
+#   limactl start nanoclaw
+#   limactl shell nanoclaw
+#
+# See lima/SETUP.md for full setup instructions.
+
+minimumLimaVersion: "2.0.0"
+
+images:
+- location: "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/aarch64/images/Fedora-Cloud-Base-Generic-43-1.6.aarch64.qcow2"
+  arch: aarch64
+  digest: "sha256:66031aea9ec61e6d0d5bba12b9454e80ca94e8a79c913d37ded4c60311705b8b"
+- location: "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
+  arch: x86_64
+  digest: "sha256:846574c8a97cd2d8dc1f231062d73107cc85cbbbda56335e264a46e3a6c8ab2f"
+
+ssh:
+  # Fedora 43 has a SELinux policy issue with vsock-based SSH
+  # https://github.com/lima-vm/lima/issues/4334
+  overVsock: false
+
+# VM resources — adjust to your hardware.
+# Claude Agent SDK + Chromium in containers need at least 4 GB RAM.
+cpus: 4
+memory: "8GiB"
+disk: "50GiB"
+
+# ---------------------------------------------------------------------------
+# Mount policy
+# ---------------------------------------------------------------------------
+# Lima mounts host directories into the VM via virtiofs (default on Apple
+# Silicon). These mounts determine what the VM process — and by extension
+# Podman containers inside it — can see on your Mac.
+#
+# Security principle: mount the MINIMUM needed, and mount it read-only
+# unless writes are required. NanoClaw's own mount-security module
+# (mount-allowlist.json) controls what the VM exposes to agent containers,
+# but Lima mounts are the outer boundary.
+#
+# What is mounted and why:
+#
+#   ~/work/experiments/nanoclaw (writable)
+#     The NanoClaw project itself. Must be writable because the process
+#     creates store/, groups/, and logs/ at runtime.
+#     NOTE: data/ (agent sessions) is intentionally kept on VM-local
+#     storage via NANOCLAW_DATA_DIR — virtiofs paths have nfs_t SELinux
+#     labels that Podman containers cannot access.
+#
+# What is NOT mounted (and why):
+#
+#   ~ (home directory)
+#     The default Lima template mounts your entire home directory.
+#     We override that. Your home contains .ssh, .gnupg, .aws, .kube,
+#     .config, browser profiles, and other sensitive material that
+#     NanoClaw does not need.
+#
+#   ~/.ssh, ~/.gnupg, ~/.aws, ~/.kube, ~/.docker
+#     Credential directories. Never needed by NanoClaw.
+#
+#   ~/.config/nanoclaw/mount-allowlist.json
+#     NanoClaw's mount allowlist is designed to live OUTSIDE the project
+#     root so that container agents cannot modify it. When running in a
+#     Lima VM, create this file INSIDE the VM (not on the host), so
+#     agent containers cannot tamper with it even if they escape Podman.
+#
+# If you need the agent to access additional host directories (e.g.
+# ~/Documents/notes for an Obsidian vault), add them below as read-only
+# mounts and also add them to mount-allowlist.json inside the VM.
+#
+# Template:
+#   - location: "~/Documents/notes"
+#     mountPoint: "/Users/<you>/Documents/notes"
+#     writable: false
+
+mounts:
+# NanoClaw project directory — writable (runtime data lives here)
+- location: "~/work/experiments/nanoclaw"
+  writable: true
+
+# Uncomment to add host directories for agent access (read-only).
+# Use the SAME absolute path as mountPoint so NanoClaw path references
+# stay consistent between host and VM.
+#
+# - location: "~/projects"
+#   mountPoint: "/Users/<you>/projects"
+#   writable: false
+
+# Provision the VM with Node.js 22 and Podman.
+# Podman is pre-installed on Fedora; we just ensure it is present
+# and install Node.js from the official Fedora repos.
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+
+    # Podman is included in Fedora Cloud, but make sure it is present
+    # along with build tools needed by native npm modules (better-sqlite3)
+    dnf install -y podman nodejs npm gcc-c++ make python3 git sqlite3
+
+    # Enable lingering so the user's systemd services (and Podman
+    # socket) survive after the SSH session disconnects
+    loginctl enable-linger "{{.User}}"
+
+- mode: user
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    # Install Claude Code for the local user (needed for /setup, /add-telegram, etc.)
+    curl -fsSL https://claude.ai/install.sh | sh
+
+# Port forwarding — expose the credential proxy port so Podman
+# containers inside the VM can reach it via host.containers.internal.
+portForwards: []
